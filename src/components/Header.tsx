@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { Plus, Sparkles, Settings, Bell, BellOff } from 'lucide-react';
+import { Plus, Sparkles, Settings, Bell } from 'lucide-react';
 import { useNotifications } from '../contexts/NotificationContext';
 
 interface HeaderProps {
