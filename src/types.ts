@@ -18,6 +18,7 @@ export interface SessionMetrics {
 
 export interface ClaudeInstance {
   id: string;
+  sessionId?: string;
   name: string;
   model: string;
   status: InstanceStatus;

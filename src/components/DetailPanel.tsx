@@ -8,8 +8,10 @@ import {
   Gauge,
   FileCode,
   Coins,
-  Settings
+  Settings,
+  ExternalLink
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import type { ClaudeInstance } from '../types';
 import { StatusBadge } from './StatusBadge';
 
@@ -27,6 +29,18 @@ export function DetailPanel({ instance, onClose, onRestart }: DetailPanelProps) 
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
   }, [instance?.terminalHistory]);
+
+  const handleOpenInTerminal = async () => {
+    if (!instance) return;
+    try {
+      await invoke('open_in_terminal', {
+        workingDirectory: instance.workingDirectory,
+        sessionId: instance.sessionId || null,
+      });
+    } catch (err) {
+      console.error('Failed to open terminal:', err);
+    }
+  };
 
   return (
     <AnimatePresence>
@@ -72,14 +86,21 @@ export function DetailPanel({ instance, onClose, onRestart }: DetailPanelProps) 
             </div>
           </div>
 
-          {/* Restart button */}
-          <div className="p-4 border-b border-[var(--border-subtle)]">
+          {/* Action buttons */}
+          <div className="p-4 border-b border-[var(--border-subtle)] flex gap-2">
+            <button
+              onClick={handleOpenInTerminal}
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-[var(--accent-ember)] text-white hover:bg-[var(--accent-ember-dim)] transition-all"
+            >
+              <ExternalLink className="w-4 h-4" />
+              <span className="text-sm font-medium">Open in Terminal</span>
+            </button>
             <button
               onClick={() => onRestart(instance.id)}
-              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] hover:border-[var(--accent-ember)] hover:bg-[var(--accent-ember-glow)] text-[var(--text-secondary)] hover:text-[var(--accent-ember)] transition-all"
+              className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)] hover:border-[var(--accent-ember)] hover:bg-[var(--accent-ember-glow)] text-[var(--text-secondary)] hover:text-[var(--accent-ember)] transition-all"
+              title="Restart Session"
             >
               <RotateCcw className="w-4 h-4" />
-              <span className="text-sm font-medium">Restart Session</span>
             </button>
           </div>
 

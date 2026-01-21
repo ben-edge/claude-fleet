@@ -62,6 +62,7 @@ pub struct SessionMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeInstance {
     pub id: String,
+    pub session_id: Option<String>,
     pub name: String,
     pub model: String,
     pub status: String,
@@ -176,11 +177,26 @@ pub fn get_all_sessions() -> Vec<SessionIndexEntry> {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
             if path.is_dir() {
+                // First try the sessions-index.json
                 let index_file = path.join("sessions-index.json");
                 if index_file.exists() {
                     if let Ok(content) = fs::read_to_string(&index_file) {
                         if let Ok(index) = serde_json::from_str::<SessionIndex>(&content) {
                             all_sessions.extend(index.entries);
+                            continue;
+                        }
+                    }
+                }
+
+                // Fallback: scan for .jsonl files directly
+                if let Ok(files) = fs::read_dir(&path) {
+                    for file in files.filter_map(|f| f.ok()) {
+                        let file_path = file.path();
+                        if file_path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                            // Parse the first few lines to get session metadata
+                            if let Some(entry) = parse_session_file(&file_path) {
+                                all_sessions.push(entry);
+                            }
                         }
                     }
                 }
@@ -191,6 +207,128 @@ pub fn get_all_sessions() -> Vec<SessionIndexEntry> {
     // Sort by modified date descending
     all_sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
     all_sessions
+}
+
+fn parse_session_file(path: &PathBuf) -> Option<SessionIndexEntry> {
+    let file = fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+
+    let mut session_id = None;
+    let mut project_path = None;
+    let mut git_branch = None;
+    let mut first_prompt = None;
+    let mut message_count = 0u32;
+    let mut first_timestamp = None;
+    let mut last_timestamp = None;
+
+    for line in reader.lines().filter_map(|l| l.ok()).take(100) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+            // Get session metadata from any message
+            if session_id.is_none() {
+                session_id = json.get("sessionId").and_then(|v| v.as_str()).map(|s| s.to_string());
+            }
+            if project_path.is_none() {
+                project_path = json.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
+            }
+            if git_branch.is_none() {
+                git_branch = json.get("gitBranch").and_then(|v| v.as_str()).map(|s| s.to_string());
+            }
+
+            // Get timestamp
+            if let Some(ts) = json.get("timestamp").and_then(|v| v.as_str()) {
+                if first_timestamp.is_none() {
+                    first_timestamp = Some(ts.to_string());
+                }
+                last_timestamp = Some(ts.to_string());
+            }
+
+            // Get first user prompt
+            if first_prompt.is_none() {
+                if json.get("type").and_then(|v| v.as_str()) == Some("user") {
+                    if let Some(msg) = json.get("message") {
+                        if let Some(content) = msg.get("content").and_then(|v| v.as_str()) {
+                            first_prompt = Some(content.chars().take(200).collect());
+                        }
+                    }
+                }
+            }
+
+            // Count messages
+            if json.get("message").is_some() {
+                message_count += 1;
+            }
+        }
+    }
+
+    let fallback_id = path.file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Some(SessionIndexEntry {
+        session_id: session_id.unwrap_or(fallback_id),
+        full_path: path.to_string_lossy().to_string(),
+        first_prompt,
+        message_count,
+        created: first_timestamp.clone().unwrap_or_default(),
+        modified: last_timestamp.unwrap_or_else(|| first_timestamp.unwrap_or_default()),
+        git_branch,
+        project_path: project_path.unwrap_or_default(),
+        is_sidechain: false,
+    })
+}
+
+pub fn get_session_metrics(session_path: &str) -> SessionMetrics {
+    let mut metrics = SessionMetrics {
+        context_usage: 0.0,
+        cost: 0.0,
+        lines_added: 0,
+        lines_removed: 0,
+        tokens_in: 0,
+        tokens_out: 0,
+    };
+
+    let path = PathBuf::from(session_path);
+    if !path.exists() {
+        return metrics;
+    }
+
+    let file = match fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return metrics,
+    };
+
+    let reader = BufReader::new(file);
+    let mut last_context_tokens: u64 = 0;
+
+    for line in reader.lines().filter_map(|l| l.ok()) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+            // Parse usage data from assistant messages
+            if let Some(msg) = json.get("message") {
+                if let Some(usage) = msg.get("usage") {
+                    let input = usage.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let output = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let cache_read = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let cache_create = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                    // Accumulate total tokens for cost calculation
+                    metrics.tokens_in += (input + cache_read + cache_create) as u32;
+                    metrics.tokens_out += output as u32;
+
+                    // Track the most recent context size (input tokens represent current context)
+                    last_context_tokens = input + cache_read + cache_create;
+                }
+            }
+        }
+    }
+
+    // Estimate cost (rough approximation for Claude)
+    // Input: $3/1M tokens, Output: $15/1M tokens (simplified)
+    metrics.cost = (metrics.tokens_in as f32 * 0.000003) + (metrics.tokens_out as f32 * 0.000015);
+
+    // Context usage based on most recent API call's input tokens (200k window)
+    metrics.context_usage = ((last_context_tokens as f32) / 200000.0 * 100.0).min(100.0);
+
+    metrics
 }
 
 pub fn get_session_history(session_path: &str, limit: usize) -> Vec<TerminalLine> {
@@ -267,8 +405,51 @@ pub fn get_session_history(session_path: &str, limit: usize) -> Vec<TerminalLine
     }
 }
 
-fn path_to_project_key(path: &str) -> String {
-    path.replace("/", "-")
+// Determine the session status by looking at file modification time and last message
+fn get_session_status(session_path: &str) -> &'static str {
+    let path = PathBuf::from(session_path);
+    if !path.exists() {
+        return "idle";
+    }
+
+    // Check if file was modified recently (within last 5 seconds = likely working)
+    let is_recently_modified = fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .map(|mtime| {
+            mtime.elapsed().map(|d| d.as_secs() < 5).unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    if is_recently_modified {
+        return "working";
+    }
+
+    // Check the last message to determine if waiting for input
+    let file = match fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return "idle",
+    };
+
+    let reader = BufReader::new(file);
+    let mut last_role: Option<String> = None;
+
+    // Read all lines to find the last message role
+    for line in reader.lines().filter_map(|l| l.ok()) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let Some(msg) = json.get("message") {
+                if let Some(role) = msg.get("role").and_then(|r| r.as_str()) {
+                    last_role = Some(role.to_string());
+                }
+            }
+        }
+    }
+
+    // If the last message was from the assistant, we're waiting for user input
+    if matches!(last_role.as_deref(), Some("assistant")) {
+        "waiting_input"
+    } else {
+        "idle"
+    }
 }
 
 pub fn get_instances() -> Vec<ClaudeInstance> {
@@ -298,18 +479,29 @@ pub fn get_instances() -> Vec<ClaudeInstance> {
             .get(&process.cwd)
             .and_then(|sessions| sessions.first());
 
-        let (terminal_history, first_prompt, branch) = if let Some(s) = session {
+        let (terminal_history, first_prompt, branch, metrics, session_times, session_id) = if let Some(s) = session {
             (
                 get_session_history(&s.full_path, 50),
                 s.first_prompt.clone(),
                 s.git_branch.clone(),
+                get_session_metrics(&s.full_path),
+                (s.created.clone(), s.modified.clone()),
+                Some(s.session_id.clone()),
             )
         } else {
-            (Vec::new(), None, None)
+            (Vec::new(), None, None, SessionMetrics {
+                context_usage: 0.0,
+                cost: 0.0,
+                lines_added: 0,
+                lines_removed: 0,
+                tokens_in: 0,
+                tokens_out: 0,
+            }, (chrono::Utc::now().to_rfc3339(), chrono::Utc::now().to_rfc3339()), None)
         };
 
         instances.push(ClaudeInstance {
             id: format!("proc-{}", process.pid),
+            session_id,
             name: first_prompt
                 .as_ref()
                 .map(|p| {
@@ -321,26 +513,17 @@ pub fn get_instances() -> Vec<ClaudeInstance> {
                 })
                 .unwrap_or_else(|| project_name.clone()),
             model: "Claude".to_string(),
-            status: if process.cpu_percent > 5.0 {
-                "working".to_string()
-            } else {
-                "idle".to_string()
-            },
+            status: session
+                .map(|s| get_session_status(&s.full_path).to_string())
+                .unwrap_or_else(|| "idle".to_string()),
             project: project_name,
             branch: branch.unwrap_or_else(|| "main".to_string()),
             working_directory: process.cwd.clone(),
             current_task: first_prompt,
-            metrics: SessionMetrics {
-                context_usage: 0.0,
-                cost: 0.0,
-                lines_added: 0,
-                lines_removed: 0,
-                tokens_in: 0,
-                tokens_out: 0,
-            },
+            metrics,
             terminal_history,
-            started_at: chrono::Utc::now().to_rfc3339(),
-            last_activity_at: chrono::Utc::now().to_rfc3339(),
+            started_at: session_times.0,
+            last_activity_at: session_times.1,
             pid: Some(process.pid),
         });
     }
@@ -361,6 +544,7 @@ pub fn get_instances() -> Vec<ClaudeInstance> {
 
             instances.push(ClaudeInstance {
                 id: session.session_id.clone(),
+                session_id: Some(session.session_id.clone()),
                 name: session
                     .first_prompt
                     .as_ref()

@@ -39,16 +39,34 @@ export function Dashboard({ instances }: DashboardProps) {
     });
   }, [instances, searchQuery, filterStatus]);
 
-  // Group instances by project
+  // Group instances by status with priority ordering
   const groupedInstances = useMemo(() => {
+    const statusConfig = [
+      { key: 'working', label: 'Working' },
+      { key: 'waiting_input', label: 'Needs Input' },
+      { key: 'idle', label: 'Idle' },
+      { key: 'offline', label: 'Offline' },
+    ];
+
     const groups: Record<string, ClaudeInstance[]> = {};
-    filteredInstances.forEach((instance) => {
-      if (!groups[instance.project]) {
-        groups[instance.project] = [];
-      }
-      groups[instance.project].push(instance);
+
+    // Initialize all groups
+    statusConfig.forEach(({ label }) => {
+      groups[label] = [];
     });
-    return groups;
+
+    // Populate groups with instances
+    filteredInstances.forEach((instance) => {
+      const config = statusConfig.find((c) => c.key === instance.status);
+      const label = config?.label || 'Offline';
+      groups[label].push(instance);
+    });
+
+    // Return in priority order
+    return statusConfig.reduce((acc, { label }) => {
+      acc[label] = groups[label];
+      return acc;
+    }, {} as Record<string, ClaudeInstance[]>);
   }, [filteredInstances]);
 
   const handleNewAgent = () => {
@@ -131,47 +149,51 @@ export function Dashboard({ instances }: DashboardProps) {
 
           {/* Grouped instances */}
           <div className="space-y-8">
-            <AnimatePresence mode="popLayout">
-              {Object.entries(groupedInstances).map(([project, projectInstances]) => (
+            <AnimatePresence>
+              {Object.entries(groupedInstances).map(([statusGroup, groupInstances]) => (
                 <motion.section
-                  key={project}
+                  key={statusGroup}
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -20 }}
                   className="space-y-4"
                 >
-                  {/* Project header */}
+                  {/* Status group header */}
                   <div className="flex items-center gap-3">
                     <h2 className="text-sm font-semibold text-[var(--accent-ember)]">
-                      {project}
+                      {statusGroup}
                     </h2>
                     <div className="flex-1 h-px bg-gradient-to-r from-[var(--accent-ember)]/30 to-transparent" />
                     <span className="text-xs text-[var(--text-muted)]">
-                      {projectInstances.length} agent{projectInstances.length !== 1 ? 's' : ''}
+                      {groupInstances.length} agent{groupInstances.length !== 1 ? 's' : ''}
                     </span>
                   </div>
 
                   {/* Instance grid */}
-                  <div
-                    className={
-                      viewMode === 'grid'
-                        ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4'
-                        : 'flex flex-col gap-3'
-                    }
-                  >
-                    <AnimatePresence mode="popLayout">
-                      {projectInstances.map((instance) => (
-                        <InstanceCard
-                          key={instance.id}
-                          instance={instance}
-                          isSelected={instance.id === selectedId}
-                          onSelect={() =>
-                            setSelectedId(selectedId === instance.id ? null : instance.id)
-                          }
-                        />
-                      ))}
-                    </AnimatePresence>
-                  </div>
+                  {groupInstances.length > 0 ? (
+                    <div
+                      className={
+                        viewMode === 'grid'
+                          ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4'
+                          : 'flex flex-col gap-3'
+                      }
+                    >
+                      <AnimatePresence>
+                        {groupInstances.map((instance) => (
+                          <InstanceCard
+                            key={instance.id}
+                            instance={instance}
+                            isSelected={instance.id === selectedId}
+                            onSelect={() =>
+                              setSelectedId(selectedId === instance.id ? null : instance.id)
+                            }
+                          />
+                        ))}
+                      </AnimatePresence>
+                    </div>
+                  ) : (
+                    <p className="text-[var(--text-muted)] text-sm italic">No agents</p>
+                  )}
                 </motion.section>
               ))}
             </AnimatePresence>

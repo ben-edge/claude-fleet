@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { motion } from 'motion/react';
-import { Plus, Sparkles, Settings, Bell } from 'lucide-react';
+import { Plus, Sparkles, Settings, Bell, BellOff } from 'lucide-react';
+import { useNotifications } from '../contexts/NotificationContext';
 
 interface HeaderProps {
   agentCount: number;
@@ -8,6 +10,17 @@ interface HeaderProps {
 }
 
 export function Header({ agentCount, activeCount, onNewAgent }: HeaderProps) {
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const { showNotification } = useNotifications();
+
+  const handleNotificationToggle = () => {
+    if (notificationsEnabled) {
+      showNotification('Claude Fleet', 'Notifications are enabled!');
+    } else {
+      setNotificationsEnabled(true);
+      showNotification('Claude Fleet', 'Notifications enabled!');
+    }
+  };
   return (
     <header className="sticky top-0 z-40 bg-[var(--bg-void)]/80 backdrop-blur-xl border-b border-[var(--border-subtle)]">
       <div className="max-w-7xl mx-auto px-6 py-4">
@@ -53,14 +66,16 @@ export function Header({ agentCount, activeCount, onNewAgent }: HeaderProps) {
               </span>
             </div>
 
-            {/* Notification bell */}
+            {/* Notification bell - click to test */}
             <motion.button
+              onClick={handleNotificationToggle}
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               className="relative p-2.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)] hover:border-[var(--border-default)] transition-colors"
+              title="Test notification"
             >
-              <Bell className="w-5 h-5 text-[var(--text-muted)]" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--accent-ember)] rounded-full" />
+              <Bell className="w-5 h-5 text-[var(--accent-ember)]" />
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-green-500 rounded-full" />
             </motion.button>
 
             {/* Settings */}

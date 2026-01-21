@@ -14,10 +14,9 @@ export function InstanceCard({ instance, isSelected, onSelect }: InstanceCardPro
 
   return (
     <motion.div
-      layout
-      initial={{ opacity: 0, y: 20 }}
+      initial={false}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
+      exit={{ opacity: 0, scale: 0.95 }}
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.98 }}
       onClick={onSelect}
@@ -96,8 +95,8 @@ export function InstanceCard({ instance, isSelected, onSelect }: InstanceCardPro
                 transition={{ duration: 0.5, ease: 'easeOut' }}
               />
             </div>
-            <span className="text-[var(--text-muted)] text-xs font-mono w-8 text-right">
-              {instance.metrics.contextUsage}%
+            <span className="text-[var(--text-muted)] text-xs font-mono w-10 text-right">
+              {Math.round(instance.metrics.contextUsage)}%
             </span>
           </div>
 
